@@ -560,6 +560,8 @@ class SystemController(Controller):
         last_pulse_time = 0.0
 
         while True:
+            self.process_pending_messages()
+
             if self.start_sent:
                 current_time = time.time()
 

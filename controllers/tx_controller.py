@@ -444,7 +444,8 @@ class TXController(Controller):
         self.log.info("TX entering NORMAL RUN state — waiting for TX_PULSE commands")
 
         while True:
-            time.sleep(0.1)
+            self.process_pending_messages()
+            time.sleep(0.01)
 
     def run(self):
         self.log.info(f"TX starting | id={self.tx_id}")
@@ -477,6 +478,7 @@ class TXController(Controller):
             else:
                 self.log.info("TX waiting for START before continuous TX")
                 while not self.running:
+                    self.process_pending_messages()
                     time.sleep(0.05)
 
             self._continuous_tx_loop()
@@ -488,6 +490,7 @@ class TXController(Controller):
 
         self.log.info("TX configured in NORMAL SYSTEM MODE")
         while not self.running:
+            self.process_pending_messages()
             time.sleep(0.05)
 
         self._normal_system_loop()

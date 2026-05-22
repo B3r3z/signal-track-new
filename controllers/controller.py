@@ -1,4 +1,6 @@
 
+import queue
+
 from loguru import logger
 from helpers.parameters import Parameters
 from helpers.mqtt_manager import MqttManager
@@ -12,14 +14,36 @@ class Controller:
         self.parameters = Parameters()
         self.log = logger   # <-- TO BRAKOWAŁO
 
+        # Kolejka wiadomości MQTT — callback paho tylko wrzuca wiadomości,
+        # przetwarzanie odbywa się w wątku głównym kontrolera.
+        # Rozwiązuje problem blokowania wątku sieciowego paho
+        # przez ciężkie operacje (odbiór USRP, obliczenia, zapis CSV).
+        self._message_queue = queue.Queue()
+
         self.mqtt = MqttManager(
             broker=self.parameters.mqtt_broker,
             port=self.parameters.mqtt_port,
             keepalive=self.parameters.mqtt_keepalive,
         )
 
-        self.mqtt.set_message_handler(self.on_message)
+        self.mqtt.set_message_handler(self._enqueue_message)
         self.mqtt.set_connect_handler(self.on_connect)
+
+    def _enqueue_message(self, message: dict):
+        """Wywoływane z wątku paho — tylko wkłada do kolejki, nie blokuje."""
+        self._message_queue.put(message)
+
+    def process_pending_messages(self):
+        """
+        Przetwarza wszystkie oczekujące wiadomości z kolejki MQTT.
+        Powinno być wywoływane regularnie z głównej pętli kontrolera.
+        """
+        while True:
+            try:
+                message = self._message_queue.get_nowait()
+            except queue.Empty:
+                break
+            self.on_message(message)
 
     def connect_bus(self):
         self.mqtt.connect()
@@ -38,19 +62,3 @@ class Controller:
 
     def on_message(self, message: dict):
         raise NotImplementedError
-
-
-
-# from loguru import logger as log
-
-# class Controller:
-#     def __init__(self, controller_type, controller_id):
-#         self.controller_type = controller_type
-#         self.controller_id = controller_id
-#         self.log = log.bind(
-#             type=controller_type,
-#             id=controller_id
-#         )
-
-#     def run(self):
-#         raise NotImplementedError

@@ -287,11 +287,11 @@ class RXController(Controller):
         self.log.info("RX READY sent")
 
         while not self.running:
+            self.process_pending_messages()
             time.sleep(0.05)
 
         self.log.info("RX entering RUN state - waiting for RX_PULSE commands")
 
         while True:
-            # Ponieważ zamieniliśmy nieskończony potok ciągły na zwiadowczy nasłuch 25-milisekundowy wyzwalany po MQTT
-            # Pętla po prostu utrzymuje wątek przy życiu
-            time.sleep(0.1)
+            self.process_pending_messages()
+            time.sleep(0.01)
