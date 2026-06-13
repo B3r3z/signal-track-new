@@ -259,7 +259,6 @@ class FSV3000IqClient:
         self._write(f"DISP:WIND:TRAC:Y:SCAL:RLEV {self.ref_level_dbm}")
 
         self._write("FORM REAL,32", required=True)
-        self._write("FORM:BORD NORM", required=False)
         self._write("TRAC:IQ ON", required=True)
         self._write("TRAC:IQ:DATA:FORM IQP", required=True)
         self._write(f"TRAC:IQ:SRAT {self.sample_rate_sps}", required=True)
