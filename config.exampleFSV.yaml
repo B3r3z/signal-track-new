@@ -20,7 +20,7 @@ mqtt:
 
 timing:
   trial_lead_time_s: 1.5
-  trial_timeout_s: 4.0
+  trial_timeout_s: 8.0
   trial_interval_s: 3.0
   pre_trigger_s: 0.01
   capture_time_s: 0.1
@@ -106,7 +106,9 @@ fsv:
   trigger_source: IMM
   trigger_level_dbm: -40
 
-  timeout_ms: 20000
+  # Musi byc krotszy niz timing.trial_timeout_s, zeby blad FSV zdazyl
+  # wrocic do aktywnej proby zamiast jako spozniona metryka.
+  timeout_ms: 3000
   expected_pulse_s: 0.065536
   pre_capture_s: 0.15
 

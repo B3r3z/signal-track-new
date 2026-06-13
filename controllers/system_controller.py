@@ -249,10 +249,22 @@ class SystemController(Controller):
     def _handle_fsv_metric(self, fsv_id, payload):
         trial_id = payload.get("trial_id")
 
-        if self.active_trial is None or trial_id is None:
+        if trial_id is None:
+            self.log.warning(f"[SYSTEM] Ignoring FSV metric from FSV{fsv_id} without trial_id")
+            return
+
+        if self.active_trial is None:
+            self.log.warning(
+                f"[SYSTEM] Ignoring FSV metric from FSV{fsv_id} for trial={trial_id} "
+                "without active trial"
+            )
             return
 
         if int(trial_id) != self.active_trial["trial_id"]:
+            self.log.warning(
+                f"[SYSTEM] Ignoring FSV metric from FSV{fsv_id} for stale trial={trial_id}; "
+                f"active_trial={self.active_trial['trial_id']}"
+            )
             return
 
         self.active_trial["fsv_metrics"][str(fsv_id)] = payload

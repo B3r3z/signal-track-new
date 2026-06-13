@@ -127,6 +127,20 @@ To jest wazne, bo bez tego FSV moglby zaczac akwizycje zbyt wczesnie albo zbyt
 pozno wzgledem zaplanowanego impulsu. `IMM` jest tu celowe: analizator nie czeka
 na trigger od mocy, tylko zbiera okno IQ w znanym czasie.
 
+Timeout FSV powinien byc krotszy niz timeout proby systemowej:
+
+```yaml
+timing:
+  trial_timeout_s: 8.0
+
+fsv:
+  timeout_ms: 3000
+```
+
+Jesli `fsv.timeout_ms` jest dluzszy niz `timing.trial_timeout_s`, system moze
+zamknac probe jako `missing_fsv`, a metryka FSV przyjdzie dopiero pozniej jako
+spozniona i zostanie zignorowana.
+
 ## Interpretacja
 
 Wyniki sa w:
