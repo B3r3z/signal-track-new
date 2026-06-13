@@ -30,7 +30,7 @@ nodes:
     "0":
       serial: "3273ABF"
       external_clock: false
-      external_time_source: true
+      external_time_source: false
   rx: {}
 
 targets:
