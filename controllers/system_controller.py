@@ -4,6 +4,7 @@ import math
 import os
 import socket
 import subprocess
+import sys
 import time
 
 import numpy as np
@@ -568,41 +569,62 @@ class SystemController(Controller):
             )
             return
 
-        commands = []
         if hasattr(os, "geteuid") and os.geteuid() == 0:
-            commands.append(["systemctl", "start", "mosquitto"])
+            self._run_broker_start_command(
+                ["systemctl", "start", "mosquitto"],
+                capture_output=True,
+            )
         else:
-            commands.append(["sudo", "-n", "systemctl", "start", "mosquitto"])
-
-        for command in commands:
-            try:
-                result = subprocess.run(
-                    command,
-                    check=False,
-                    capture_output=True,
-                    text=True,
-                    timeout=10.0,
+            result = self._run_broker_start_command(
+                ["sudo", "-n", "systemctl", "start", "mosquitto"],
+                capture_output=True,
+            )
+            if result is not True and sys.stdin.isatty():
+                self.log.info("MQTT broker start requires sudo password")
+                self._run_broker_start_command(
+                    ["sudo", "systemctl", "start", "mosquitto"],
+                    capture_output=False,
                 )
-            except FileNotFoundError:
-                continue
-            except subprocess.TimeoutExpired:
-                self.log.warning("Starting MQTT broker timed out")
-                return
 
-            if result.returncode == 0:
-                time.sleep(0.5)
-                if self._mqtt_port_is_open():
-                    self.log.info("MQTT broker started")
-                    return
-
-            stderr = (result.stderr or "").strip()
-            if stderr:
-                self.log.warning(f"MQTT broker start failed: {stderr}")
+        time.sleep(0.5)
+        if self._mqtt_port_is_open():
+            self.log.info("MQTT broker started")
+            return
 
         self.log.warning(
             "MQTT broker is not running; start it manually with: "
             "sudo systemctl start mosquitto"
         )
+
+    def _run_broker_start_command(self, command, capture_output):
+        try:
+            result = subprocess.run(
+                command,
+                check=False,
+                capture_output=capture_output,
+                text=True,
+                timeout=None if not capture_output else 10.0,
+            )
+        except FileNotFoundError:
+            self.log.warning(f"MQTT broker start command not found: {command[0]}")
+            return False
+        except subprocess.TimeoutExpired:
+            self.log.warning("Starting MQTT broker timed out")
+            return False
+
+        if result.returncode == 0:
+            return True
+
+        stderr = ""
+        if capture_output:
+            stderr = (result.stderr or "").strip()
+        if stderr:
+            self.log.warning(f"MQTT broker start failed: {stderr}")
+        else:
+            self.log.warning(
+                f"MQTT broker start failed with exit code {result.returncode}"
+            )
+        return False
 
     def run(self):
         self.log.info("SystemController running - waiting for components")

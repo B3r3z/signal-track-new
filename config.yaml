@@ -6,7 +6,7 @@ mqtt:
   broker: 192.168.8.143
   port: 1883
   keepalive: 60
-  start_broker: true
+  start_broker: false
 
 timing:
   trial_lead_time_s: 1.5
@@ -51,7 +51,7 @@ nodes:
 
   rx:
     "0":
-      serial: "3273AF9"
+      serial: "3273AB3"
       external_clock: false
       external_time_source: false
     # "1":
