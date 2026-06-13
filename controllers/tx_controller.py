@@ -3,16 +3,14 @@ import os
 import numpy as np
 
 from controllers.controller import Controller
-from helpers.parameters import Parameters
+from helpers.protocol import Command
 from helpers.sync_monitor import SyncMonitor
 
 
 class TXController(Controller):
 
-    def __init__(self, tx_id):
-        super().__init__("tx", tx_id)
-
-        self.parameters = Parameters()
+    def __init__(self, tx_id, config_path=None):
+        super().__init__("tx", tx_id, config_path=config_path)
 
         self.tx_id = tx_id
         self.serial = self.parameters.get_tx_serial(tx_id)
@@ -36,6 +34,16 @@ class TXController(Controller):
 
         with open(self.timing_csv, "w", encoding="utf-8") as f:
             f.write("tx_id,target_time,usrp_time_received,usrp_time_after_send,zapas_ms\n")
+
+    def _control_value_for_tx(self, control_map, default):
+        if not isinstance(control_map, dict):
+            return default
+
+        for key in (str(self.tx_id), int(self.tx_id), self.tx_id):
+            if key in control_map:
+                return control_map[key]
+
+        return default
 
     def _init_usrp(self):
         import uhd
@@ -232,16 +240,18 @@ class TXController(Controller):
     def on_message(self, m: dict):
         cmd = m.get("cmd")
 
-        if cmd == "START":
+        if cmd == Command.START.value:
             self.log.info("TX START received")
             self.running = True
 
-        elif cmd == "SYNC_CLOCKS":
-            import uhd
-
+        elif cmd == Command.SYNC_CLOCKS.value:
             if self.usrp is None:
-                self.log.warning(f"[TX {self.tx_id}] SYNC_CLOCKS ignored — USRP not initialized")
+                self.log.warning(
+                    f"[TX {self.tx_id}] SYNC_CLOCKS ignored - USRP not initialized"
+                )
                 return
+
+            import uhd
 
             if self.parameters.tx_use_external_time_source:
                 self.usrp.set_time_next_pps(uhd.types.TimeSpec(0.0))
@@ -250,7 +260,7 @@ class TXController(Controller):
                 self.usrp.set_time_now(uhd.types.TimeSpec(0.0))
                 self.log.info(f"[TX {self.tx_id}] Zegar USRP wyzerowany natychmiastowo")
 
-        elif cmd == "STOP":
+        elif cmd == Command.STOP.value:
             self.log.info("TX STOP received")
             self.running = False
 
@@ -260,13 +270,10 @@ class TXController(Controller):
             phase_map = payload.get("phase_map", {})
             amplitude_map = payload.get("amplitude_map", {})
 
-            my_id = str(self.tx_id)
-
-            if isinstance(phase_map, dict) and my_id in phase_map:
-                self.tx_phase = float(phase_map[my_id])
-
-            if isinstance(amplitude_map, dict) and my_id in amplitude_map:
-                self.tx_amplitude = float(amplitude_map[my_id])
+            self.tx_phase = float(self._control_value_for_tx(phase_map, self.tx_phase))
+            self.tx_amplitude = float(
+                self._control_value_for_tx(amplitude_map, self.tx_amplitude)
+            )
 
             self.log.info(
                 f"TX_CMD received | "
@@ -276,28 +283,28 @@ class TXController(Controller):
                 f"amp={self.tx_amplitude:.3f}"
             )
 
-        elif cmd == "TX_PULSE":
+        elif cmd == Command.TX_PULSE.value:
             if self.continuous_mode:
                 self.log.debug(f"[TX {self.tx_id}] TX_PULSE ignored — continuous TX mode")
                 return
 
             payload = m.get("payload", {})
+            trial_id = payload.get("trial_id")
             target_time = payload.get("target_time")
 
             if target_time is None:
                 self.log.error(f"[TX {self.tx_id}] TX_PULSE without target_time")
                 return
 
+            target_time = float(target_time)
+
             phase_map = payload.get("phase_map", {})
             amplitude_map = payload.get("amplitude_map", {})
 
-            my_id = str(self.tx_id)
-
-            if isinstance(phase_map, dict) and my_id in phase_map:
-                self.tx_phase = float(phase_map[my_id])
-
-            if isinstance(amplitude_map, dict) and my_id in amplitude_map:
-                self.tx_amplitude = float(amplitude_map[my_id])
+            self.tx_phase = float(self._control_value_for_tx(phase_map, self.tx_phase))
+            self.tx_amplitude = float(
+                self._control_value_for_tx(amplitude_map, self.tx_amplitude)
+            )
 
             self.log.info(
                 f"[TX {self.tx_id}] TX_PULSE CONFIG | "
@@ -322,17 +329,33 @@ class TXController(Controller):
                 )
 
             samples = self._generate_samples()
+            samples_requested = int(len(samples))
+            samples_sent = samples_requested if self.parameters.test_mode else 0
+            late = False
 
             if not self.parameters.test_mode:
-                self._send_samples(samples, target_time=target_time)
+                if usrp_time_received is not None:
+                    late = bool(target_time < usrp_time_received)
 
-                usrp_time_after_send = self.usrp.get_time_now().get_real_secs()
+                if late:
+                    self.log.error(
+                        f"[TX {self.tx_id}] LATE COMMAND | "
+                        f"trial={trial_id} | target={target_time:.6f} | "
+                        f"usrp_now={usrp_time_received:.6f}"
+                    )
+                    usrp_time_after_send = self.usrp.get_time_now().get_real_secs()
+                else:
+                    samples_sent = int(
+                        self._send_samples(samples, target_time=target_time)
+                    )
 
-                self.log.info(
-                    f"[TX {self.tx_id}] DANE PRZEKAZANE DO BUFORA USRP | "
-                    f"usrp_after_send={usrp_time_after_send:.6f} s | "
-                    f"target={target_time:.6f} s"
-                )
+                    usrp_time_after_send = self.usrp.get_time_now().get_real_secs()
+
+                    self.log.info(
+                        f"[TX {self.tx_id}] DANE PRZEKAZANE DO BUFORA USRP | "
+                        f"usrp_after_send={usrp_time_after_send:.6f} s | "
+                        f"target={target_time:.6f} s"
+                    )
 
                 if usrp_time_received is not None and zapas_ms is not None:
                     with open(self.timing_csv, "a", encoding="utf-8") as f:
@@ -345,13 +368,20 @@ class TXController(Controller):
                         )
 
             self.send_message(
-                "TX_ACTIVE",
+                Command.TX_DONE,
                 {
-                    "n_samples": len(samples),
+                    "trial_id": trial_id,
+                    "tx_id": str(self.tx_id),
                     "target_time": target_time,
+                    "samples_requested": samples_requested,
+                    "samples_sent": samples_sent,
+                    "late": late,
                     "phase": self.tx_phase,
                     "phase_deg": float(np.rad2deg(self.tx_phase)),
                     "amplitude": self.tx_amplitude,
+                    "phase_cmd_rad": self.tx_phase,
+                    "phase_cmd_deg": float(np.rad2deg(self.tx_phase)),
+                    "amplitude_cmd": self.tx_amplitude,
                 }
             )
 
@@ -451,7 +481,7 @@ class TXController(Controller):
         self.log.info(f"TX starting | id={self.tx_id}")
         self.connect_bus()
 
-        self.send_message("REGISTER", {"serial": self.serial})
+        self.send_message(Command.REGISTER, {"serial": self.serial})
         self.log.info("TX registration sent")
 
         if not self.parameters.test_mode:
@@ -459,7 +489,7 @@ class TXController(Controller):
                 self.log.error("TX USRP init failed → exiting")
                 return
 
-        self.send_message("READY", {})
+        self.send_message(Command.READY, {})
         self.ready_sent = True
         self.log.info("TX READY sent")
 

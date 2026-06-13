@@ -4,14 +4,19 @@ import queue
 from loguru import logger
 from helpers.parameters import Parameters
 from helpers.mqtt_manager import MqttManager
+from helpers.protocol import command_value
 
 
 class Controller:
-    def __init__(self, role: str, node_id: int):
+    def __init__(self, role: str, node_id: int, config_path=None):
         self.role = role
         self.node_id = node_id
 
-        self.parameters = Parameters()
+        self.parameters = Parameters(
+            config_path=config_path,
+            role=role,
+            node_id=node_id,
+        )
         self.log = logger   # <-- TO BRAKOWAŁO
 
         # Kolejka wiadomości MQTT — callback paho tylko wrzuca wiadomości,
@@ -53,7 +58,7 @@ class Controller:
         self.mqtt.send_message(
             src=self.role,
             node_id=self.node_id,
-            cmd=cmd,
+            cmd=command_value(cmd),
             payload=payload or {},
         )
 
