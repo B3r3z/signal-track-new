@@ -25,15 +25,15 @@ class Parameters:
         # ============================================================
         # Dla 4 osobnych B210 to jest konieczne do sensownego fazowania.
         # Wszystkie TX muszą mieć wspólny/stabilny 10 MHz REF IN i PPS.
-        self.tx_use_external_clock = True
+        self.tx_use_external_clock = False
         self.tx_use_external_time_source = True
 
         # RX mogą zostać bez PPS, ale do precyzyjnych pomiarów lepiej też zsynchronizować.
         self.rx_use_external_clock = False
-        self.rx_use_external_time_source = False
+        self.rx_use_external_time_source = True
 
         # Stare flagi — zachowane dla kompatybilności
-        self.use_external_clock = True
+        self.use_external_clock = False
         self.use_external_time_source = True
 
         self.pps_timeout_sec = 2.5
@@ -190,6 +190,8 @@ class Parameters:
 
         if config_path is not None:
             self.apply_config(config_path, role=role, node_id=node_id)
+
+        self._validate_configuration()
 
     def apply_config(self, config_path, role=None, node_id=None):
         config_file = Path(config_path)
@@ -450,3 +452,52 @@ class Parameters:
 
     def get_tx_serial(self, tx_id):
         return self.tx_usrp_serial_map[str(tx_id)]
+
+    def _validate_configuration(self):
+        if self.trial_lead_time_s <= 0:
+            raise ValueError("trial_lead_time_s must be > 0")
+
+        if self.trial_interval_s <= 0:
+            raise ValueError("trial_interval_s must be > 0")
+
+        if self.capture_time_s <= 0:
+            raise ValueError("capture_time_s must be > 0")
+
+        if self.measurement_per_phase <= 0:
+            raise ValueError("measurement_per_phase must be > 0")
+
+        tx_ids = {str(tx_id) for tx_id in self.get_tx_ids()}
+        rx_ids = {str(rx_id) for rx_id in self.get_rx_ids()}
+
+        if not tx_ids:
+            raise ValueError("At least one TX node must be configured")
+
+        if not rx_ids:
+            raise ValueError("At least one RX node must be configured")
+
+        target_rx_id = str(self.beamforming_target_rx_id)
+        if target_rx_id not in rx_ids:
+            raise ValueError(
+                f"Beamforming target RX id={target_rx_id} is not configured"
+            )
+
+        tx_array_order = [str(tx_id) for tx_id in self.tx_array_order]
+        if set(tx_array_order) != tx_ids:
+            raise ValueError(
+                "tx_array_order must contain each configured TX id exactly once"
+            )
+
+        if str(self.beamforming_input_mode).lower() in ("fi", "manual_sweep"):
+            for idx, phase_map in enumerate(self.phase_map_sweep_deg):
+                phase_ids = {str(tx_id) for tx_id in phase_map.keys()}
+                if phase_ids != tx_ids:
+                    raise ValueError(
+                        f"phase_map_sweep_deg[{idx}] must define every configured TX id"
+                    )
+
+            for idx, amplitude_map in enumerate(self.amplitude_map_sweep):
+                amplitude_ids = {str(tx_id) for tx_id in amplitude_map.keys()}
+                if amplitude_ids != tx_ids:
+                    raise ValueError(
+                        f"amplitude_map_sweep[{idx}] must define every configured TX id"
+                    )

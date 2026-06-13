@@ -1,5 +1,6 @@
 import csv
 import json
+import math
 import os
 import time
 
@@ -36,6 +37,7 @@ class SystemController(Controller):
         self.start_sent = False
         self._last_ready_state = None
         self.start_time_stamp = None
+        self.sync_epoch_pc = None
 
         self.trial_id = 0
         self.last_target_time = -float(self.parameters.trial_interval_s)
@@ -190,13 +192,21 @@ class SystemController(Controller):
             "detected_time": payload.get("detected_time"),
             "offset_ms": payload.get("offset_ms"),
             "samples_used": payload.get("samples_used"),
+            "capture_ok": bool(payload.get("capture_ok", True)),
+            "failure_reason": payload.get("failure_reason", ""),
         }
 
         self.active_trial["rx_metrics"][str(rx_id)] = metric
-        self.log.info(
-            f"[TRIAL {trial_id}] RX{rx_id} metric | "
-            f"power={metric['power_db']:.2f} dB"
-        )
+        if metric["capture_ok"]:
+            self.log.info(
+                f"[TRIAL {trial_id}] RX{rx_id} metric | "
+                f"power={metric['power_db']:.2f} dB"
+            )
+        else:
+            self.log.warning(
+                f"[TRIAL {trial_id}] RX{rx_id} capture failed | "
+                f"reason={metric['failure_reason']}"
+            )
         self._maybe_finish_trial()
 
     def _handle_tx_done(self, tx_id, payload, legacy=False):
@@ -267,22 +277,33 @@ class SystemController(Controller):
 
         if self.tx_ready == self.tx_ids and self.rx_ready == self.rx_ids:
             self.state = ExperimentState.SYNCING_CLOCKS
+            self.sync_epoch_pc = math.ceil(time.time())
             self.log.info("All required TX/RX ready, sending SYNC_CLOCKS")
             self.send_message(
                 Command.SYNC_CLOCKS,
                 {"time_at_next_pps": 0.0},
             )
-            time.sleep(3.0)
+
+            wait_after_pps_s = 0.2
+            wait_time_s = max(
+                0.0,
+                (self.sync_epoch_pc - time.time()) + wait_after_pps_s,
+            )
+            if wait_time_s > 0:
+                time.sleep(wait_time_s)
 
             self.logic.start()
             self.current_tx_command = self.beamforming.current_tx_command()
             self.send_message(Command.START, {})
             self.start_sent = True
-            self.start_time_stamp = time.time()
+            self.start_time_stamp = self.sync_epoch_pc
             self.state = ExperimentState.READY_TO_MEASURE
             self.log.info("START sent, system ready to measure")
 
     def _next_target_time(self):
+        if self.start_time_stamp is None:
+            raise RuntimeError("System clock has not been synchronized yet")
+
         elapsed_hw = time.time() - self.start_time_stamp
         min_target = elapsed_hw + float(self.parameters.trial_lead_time_s)
         grid_target = self.last_target_time + float(self.parameters.trial_interval_s)
@@ -386,10 +407,37 @@ class SystemController(Controller):
             bool(status.get("late", False))
             for status in trial["tx_statuses"].values()
         )
+        any_partial_tx = any(
+            int(status.get("samples_sent", 0))
+            < int(status.get("samples_requested", 0))
+            for status in trial["tx_statuses"].values()
+        )
+        any_failed_rx = any(
+            not bool(metric.get("capture_ok", True))
+            for metric in trial["rx_metrics"].values()
+        )
 
         if any_late:
             trial["status"] = "FAILED"
             trial["failure_reason"] = "late TX command"
+            update_beamforming = False
+
+        if any_partial_tx:
+            trial["status"] = "FAILED"
+            trial["failure_reason"] = "partial TX send"
+            update_beamforming = False
+
+        if any_failed_rx:
+            trial["status"] = "FAILED"
+            failure_reason = next(
+                (
+                    metric.get("failure_reason")
+                    for metric in trial["rx_metrics"].values()
+                    if not bool(metric.get("capture_ok", True))
+                ),
+                "RX capture failed",
+            )
+            trial["failure_reason"] = str(failure_reason)
             update_beamforming = False
 
         if trial["status"] == "RUNNING":

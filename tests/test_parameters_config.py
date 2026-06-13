@@ -163,3 +163,12 @@ def test_target_mapping_tc1_to_rx_id(tmp_path):
 
     with pytest.raises(ValueError, match="Unknown beamforming target"):
         params.get_target_rx_id("missing")
+
+
+def test_default_sync_configuration_prefers_pps_without_external_10mhz():
+    params = Parameters()
+
+    assert params.tx_use_external_clock is False
+    assert params.rx_use_external_clock is False
+    assert params.tx_use_external_time_source is True
+    assert params.rx_use_external_time_source is True

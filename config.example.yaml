@@ -33,33 +33,33 @@ nodes:
   tx:
     "0":
       serial: "3273ABF"
-      external_clock: true
+      external_clock: false
       external_time_source: true
     "1":
       serial: "3273ACB"
-      external_clock: true
+      external_clock: false
       external_time_source: true
     "2":
       serial: "3273A15"
-      external_clock: true
+      external_clock: false
       external_time_source: true
     "3":
       serial: "3273ADC"
-      external_clock: true
+      external_clock: false
       external_time_source: true
 
   rx:
     "0":
       serial: "3273AF9"
-      external_clock: true
+      external_clock: false
       external_time_source: true
     "1":
       serial: "3273AC0"
-      external_clock: true
+      external_clock: false
       external_time_source: true
     "2":
       serial: "3273B03"
-      external_clock: true
+      external_clock: false
       external_time_source: true
 
 targets:

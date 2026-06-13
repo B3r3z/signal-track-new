@@ -45,6 +45,27 @@ class TXController(Controller):
 
         return default
 
+    def _configure_clock_source(self):
+        if self.parameters.tx_use_external_clock:
+            try:
+                self.usrp.set_clock_source("external")
+                self.log.info(
+                    f"[TX {self.tx_id}] Ustawiony zewnetrzny clock: REF IN 10 MHz"
+                )
+                return "external"
+            except Exception as e:
+                self.log.warning(
+                    f"[TX {self.tx_id}] Brak zewnetrznego 10 MHz, fallback do internal: {e}"
+                )
+
+        try:
+            self.usrp.set_clock_source("internal")
+            self.log.info(f"[TX {self.tx_id}] Uzywany wewnetrzny clock")
+            return "internal"
+        except Exception as e:
+            self.log.error(f"[TX {self.tx_id}] Setting internal clock failed: {e}")
+            return None
+
     def _init_usrp(self):
         import uhd
 
@@ -90,14 +111,18 @@ class TXController(Controller):
         # CLOCK SOURCE
         # ============================================================
 
-        if self.parameters.tx_use_external_clock:
+        clock_source = self._configure_clock_source()
+        if clock_source is None:
+            return False
+
+        if False and self.parameters.tx_use_external_clock:
             try:
                 self.usrp.set_clock_source("external")
                 self.log.info(f"[TX {self.tx_id}] Ustawiony zewnętrzny clock: REF IN 10 MHz")
             except Exception as e:
                 self.log.error(f"[TX {self.tx_id}] Setting external clock failed: {e}")
                 return False
-        else:
+        elif False:
             self.log.info(f"[TX {self.tx_id}] Używany wewnętrzny clock")
 
         # ============================================================

@@ -6,6 +6,7 @@ import numpy as np
 
 from controllers.controller import Controller
 from helpers.protocol import Command
+from helpers.sync_monitor import SyncMonitor
 
 
 class RXController(Controller):
@@ -42,6 +43,25 @@ class RXController(Controller):
                 "max_power_linear",
             ])
 
+    def _configure_clock_source(self):
+        if self.parameters.rx_use_external_clock:
+            try:
+                self.usrp.set_clock_source("external")
+                self.log.info(f"[RX {self.rx_id}] Ustawiony zewnetrzny clock 10 MHz")
+                return "external"
+            except Exception as e:
+                self.log.warning(
+                    f"[RX {self.rx_id}] Brak zewnetrznego 10 MHz, fallback do internal: {e}"
+                )
+
+        try:
+            self.usrp.set_clock_source("internal")
+            self.log.info(f"[RX {self.rx_id}] Uzywany wewnetrzny clock")
+            return "internal"
+        except Exception as e:
+            self.log.error(f"[RX {self.rx_id}] Setting internal clock failed: {e}")
+            return None
+
     def _init_usrp(self):
         import uhd
 
@@ -53,15 +73,7 @@ class RXController(Controller):
             self.usrp = None
             return False
 
-        try:
-            if self.parameters.rx_use_external_clock:
-                self.usrp.set_clock_source("external")
-                self.log.info(f"[RX {self.rx_id}] Ustawiony zewnetrzny clock 10 MHz")
-            else:
-                self.usrp.set_clock_source("internal")
-                self.log.info(f"[RX {self.rx_id}] Uzywany wewnetrzny clock")
-        except Exception as e:
-            self.log.error(f"[RX {self.rx_id}] Setting clock source failed: {e}")
+        if self._configure_clock_source() is None:
             return False
 
         try:
@@ -97,6 +109,17 @@ class RXController(Controller):
             self.log.info(f"[RX {self.rx_id}] Uzywany wewnetrzny time source")
 
         self.log.info(f"[RX {self.rx_id}] USRP initialized")
+
+        if self.parameters.rx_use_external_time_source and not self.parameters.test_mode:
+            sync_monitor = SyncMonitor(self.usrp, self.rx_id, "rx")
+
+            if sync_monitor.wait_for_pps_lock(timeout=5.0, verbose=True):
+                sync_monitor.print_sync_stats()
+                self.log.info(f"[RX {self.rx_id}] PPS zsynchronizowany")
+            else:
+                self.log.error(f"[RX {self.rx_id}] Brak synchronizacji PPS")
+                return False
+
         return True
 
     def _recv_window(self, target_time, pre_trigger_s=None, capture_time_s=None):
@@ -123,11 +146,19 @@ class RXController(Controller):
 
         timeout_s = max(4.0, margin_sec + window_duration + 1.0)
         num_rx = self.rx_streamer.recv(samples, md, timeout_s)
+        received_samples = samples[0, :num_rx].copy()
+        error_code = md.error_code
+        capture_ok = (
+            num_rx == num_samps
+            and error_code == uhd.types.RXMetadataErrorCode.none
+        )
+        failure_reasons = []
 
         if num_rx == 0:
             self.log.error(
                 f"[RX {self.rx_id}] Otrzymano pusty bufor - mozliwy late command"
             )
+            failure_reasons.append("empty RX buffer")
 
         if md.has_time_spec:
             self.log.info(
@@ -135,10 +166,25 @@ class RXController(Controller):
                 f"{md.time_spec.get_real_secs():.6f}"
             )
 
-        if md.error_code != uhd.types.RXMetadataErrorCode.none:
-            self.log.error(f"[RX {self.rx_id}] Blad bufora RX: {md.error_code}")
+        if num_rx != num_samps:
+            self.log.error(
+                f"[RX {self.rx_id}] Niepelny odbior RX | "
+                f"received={num_rx} expected={num_samps}"
+            )
+            failure_reasons.append(
+                f"partial RX capture ({num_rx}/{num_samps})"
+            )
 
-        return samples[0], start_time
+        if error_code != uhd.types.RXMetadataErrorCode.none:
+            self.log.error(f"[RX {self.rx_id}] Blad bufora RX: {error_code}")
+            failure_reasons.append(f"metadata error: {error_code}")
+
+        return received_samples, start_time, {
+            "ok": bool(capture_ok),
+            "received": int(num_rx),
+            "expected": int(num_samps),
+            "failure_reason": "; ".join(failure_reasons),
+        }
 
     def on_connect(self, rc: int):
         self.log.info(f"RX connected to MQTT | id={self.rx_id}")
@@ -202,7 +248,7 @@ class RXController(Controller):
         )
 
         if not self.parameters.test_mode and self.rx_streamer is not None:
-            samples, start_time = self._recv_window(
+            samples, start_time, capture_status = self._recv_window(
                 target_time,
                 pre_trigger_s=pre_trigger_s,
                 capture_time_s=capture_time_s,
@@ -214,18 +260,44 @@ class RXController(Controller):
                 np.random.randn(num_samps)
                 + 1j * np.random.randn(num_samps)
             ).astype(np.complex64)
+            capture_status = {
+                "ok": True,
+                "received": int(len(samples)),
+                "expected": int(len(samples)),
+                "failure_reason": "",
+            }
 
         self._append_iq_csv(samples, start_time)
-        metric = self._compute_power_metric(samples, start_time, target_time)
+
+        if capture_status["ok"]:
+            metric = self._compute_power_metric(samples, start_time, target_time)
+        else:
+            metric = {
+                "target_time": target_time,
+                "detected_time": None,
+                "offset_ms": None,
+                "samples_used": int(capture_status["received"]),
+                "power_linear": 0.0,
+                "power_db": -150.0,
+                "max_power_linear": 0.0,
+                "max_power_db": -150.0,
+            }
+
         self._append_power_csv(trial_id, metric)
 
-        self.log.info(
-            f"[RX {self.rx_id}] trial={trial_id} | "
-            f"target={target_time:.6f} | "
-            f"detected={metric['detected_time']:.9f} | "
-            f"offset={metric['offset_ms']:.3f} ms | "
-            f"power={metric['power_db']:.2f} dB"
-        )
+        if capture_status["ok"]:
+            self.log.info(
+                f"[RX {self.rx_id}] trial={trial_id} | "
+                f"target={target_time:.6f} | "
+                f"detected={metric['detected_time']:.9f} | "
+                f"offset={metric['offset_ms']:.3f} ms | "
+                f"power={metric['power_db']:.2f} dB"
+            )
+        else:
+            self.log.warning(
+                f"[RX {self.rx_id}] trial={trial_id} capture failed | "
+                f"reason={capture_status['failure_reason']}"
+            )
 
         self.send_message(Command.RX_METRIC, {
             "trial_id": trial_id,
@@ -240,6 +312,10 @@ class RXController(Controller):
             "avg_power_db": metric["power_db"],
             "max_power_lin": metric["max_power_linear"],
             "max_power_db": metric["max_power_db"],
+            "capture_ok": bool(capture_status["ok"]),
+            "failure_reason": capture_status["failure_reason"],
+            "samples_received": capture_status["received"],
+            "samples_expected": capture_status["expected"],
         })
 
     def _append_iq_csv(self, samples, start_time):
@@ -292,8 +368,16 @@ class RXController(Controller):
             writer.writerow([
                 trial_id,
                 f"{metric['target_time']:.6f}",
-                f"{metric['detected_time']:.9f}",
-                f"{metric['offset_ms']:.3f}",
+                (
+                    f"{metric['detected_time']:.9f}"
+                    if metric["detected_time"] is not None
+                    else ""
+                ),
+                (
+                    f"{metric['offset_ms']:.3f}"
+                    if metric["offset_ms"] is not None
+                    else ""
+                ),
                 metric["samples_used"],
                 metric["power_db"],
                 metric["max_power_db"],
