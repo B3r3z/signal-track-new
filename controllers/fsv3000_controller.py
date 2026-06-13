@@ -2,6 +2,8 @@ import csv
 import math
 import os
 import queue
+import socket
+import struct
 import threading
 import time
 from datetime import datetime, timezone
@@ -23,6 +25,112 @@ def db10(x, eps=1e-15):
 
 def now_iso():
     return datetime.now(timezone.utc).astimezone().isoformat(timespec="milliseconds")
+
+
+class RawSocketScpiClient:
+    def __init__(self, resource, timeout_ms):
+        self.resource = resource
+        self.timeout_s = float(timeout_ms) / 1000.0
+        self.sock = None
+
+    def open(self):
+        parts = self.resource.split("::")
+        if len(parts) < 4 or parts[0].upper() != "TCPIP":
+            raise ValueError(f"Unsupported socket resource: {self.resource}")
+
+        host = parts[1]
+        port = int(parts[2])
+        self.sock = socket.create_connection((host, port), timeout=self.timeout_s)
+        self.sock.settimeout(self.timeout_s)
+
+    def close(self):
+        if self.sock is None:
+            return
+        try:
+            self.sock.close()
+        finally:
+            self.sock = None
+
+    def go_to_local(self):
+        return
+
+    def write_str(self, cmd):
+        self._send(cmd)
+
+    def write_with_opc(self, cmd, timeout=None):
+        old_timeout = None
+        if timeout is not None:
+            old_timeout = self.sock.gettimeout()
+            self.sock.settimeout(float(timeout) / 1000.0)
+        try:
+            self._send(cmd)
+            self.query_str("*OPC?")
+        finally:
+            if old_timeout is not None:
+                self.sock.settimeout(old_timeout)
+
+    def query_str(self, cmd):
+        self._send(cmd)
+        return self._recv_text()
+
+    def query_bin_or_ascii_float_list(self, cmd):
+        self._send(cmd)
+        first = self._recv_exact(1)
+        if first == b"#":
+            digits = int(self._recv_exact(1).decode("ascii"))
+            size = int(self._recv_exact(digits).decode("ascii"))
+            payload = self._recv_exact(size)
+            self._consume_line_end()
+            return struct.unpack(f">{size // 4}f", payload)
+
+        data = first + self._recv_until_newline()
+        text = data.decode("ascii", errors="replace").strip()
+        if not text:
+            return []
+        return [float(x) for x in text.replace(";", ",").split(",") if x.strip()]
+
+    def _send(self, cmd):
+        if self.sock is None:
+            raise RuntimeError("SCPI socket is not open")
+        self.sock.sendall((cmd.rstrip() + "\n").encode("ascii"))
+
+    def _recv_text(self):
+        return self._recv_until_newline().decode("ascii", errors="replace").strip()
+
+    def _recv_until_newline(self):
+        chunks = []
+        while True:
+            chunk = self.sock.recv(4096)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            if b"\n" in chunk:
+                break
+        return b"".join(chunks)
+
+    def _recv_exact(self, size):
+        chunks = []
+        remaining = int(size)
+        while remaining > 0:
+            chunk = self.sock.recv(remaining)
+            if not chunk:
+                raise RuntimeError("Socket closed while reading SCPI response")
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        return b"".join(chunks)
+
+    def _consume_line_end(self):
+        old_timeout = self.sock.gettimeout()
+        self.sock.settimeout(0.05)
+        try:
+            while True:
+                ch = self.sock.recv(1)
+                if not ch or ch == b"\n":
+                    break
+        except socket.timeout:
+            pass
+        finally:
+            self.sock.settimeout(old_timeout)
 
 
 class FSV3000IqClient:
@@ -50,7 +158,7 @@ class FSV3000IqClient:
         self.sample_rate_sps = float(getattr(parameters, "fsv_iq_sample_rate_sps", 1e6))
         self.capture_time_s = float(getattr(parameters, "fsv_capture_time_s", 0.20))
         self.ref_level_dbm = float(getattr(parameters, "fsv_ref_level_dbm", 0.0))
-        self.trigger_source = str(getattr(parameters, "fsv_trigger_source", "IFP")).upper()
+        self.trigger_source = str(getattr(parameters, "fsv_trigger_source", "IMM")).upper()
         self.trigger_level_dbm = float(getattr(parameters, "fsv_trigger_level_dbm", -40.0))
         self.timeout_ms = int(getattr(parameters, "fsv_timeout_ms", 20000))
         self.test_mode = bool(getattr(parameters, "fsv_test_mode", getattr(parameters, "test_mode", False)))
@@ -60,6 +168,14 @@ class FSV3000IqClient:
         if self.test_mode:
             return
 
+        if self.resource.upper().endswith("::SOCKET"):
+            logger.info("FSV3000 connection backend: raw SCPI socket")
+            self.inst = RawSocketScpiClient(self.resource, self.timeout_ms)
+            self.inst.open()
+            idn = self.inst.query_str("*IDN?").strip()
+            self.configure()
+            return idn
+
         try:
             from RsInstrument import RsInstrument
         except ImportError as exc:
@@ -68,10 +184,8 @@ class FSV3000IqClient:
                 "python3 -m pip install RsInstrument"
             ) from exc
 
-        if self.resource.upper().endswith("::SOCKET"):
-            self.inst = RsInstrument(self.resource, True, False, "SelectVisa='socket'")
-        else:
-            self.inst = RsInstrument(self.resource, True, False)
+        logger.info("FSV3000 connection backend: RsInstrument/VISA")
+        self.inst = RsInstrument(self.resource, True, False)
 
         self.inst.visa_timeout = self.timeout_ms
         self.inst.opc_timeout = self.timeout_ms
@@ -145,6 +259,7 @@ class FSV3000IqClient:
         self._write(f"DISP:WIND:TRAC:Y:SCAL:RLEV {self.ref_level_dbm}")
 
         self._write("FORM REAL,32", required=True)
+        self._write("FORM:BORD NORM", required=False)
         self._write("TRAC:IQ ON", required=True)
         self._write("TRAC:IQ:DATA:FORM IQP", required=True)
         self._write(f"TRAC:IQ:SRAT {self.sample_rate_sps}", required=True)
@@ -152,11 +267,12 @@ class FSV3000IqClient:
         record_len = int(self.sample_rate_sps * self.capture_time_s)
         self._write(f"TRAC:IQ:RLEN {record_len}", required=True)
 
-        # Na testy IMM, potem można wrócić do IFP
+        # W trybie systemowym znamy target_time, wiec IMM + pre_capture_s jest
+        # stabilniejsze niz czekanie na trigger od mocy IF.
         trig_src = self.trigger_source.upper()
 
         if trig_src not in ("IMM", "IFP", "EXT"):
-            trig_src = "IFP"
+            trig_src = "IMM"
 
         self._write(f"TRIG:SOUR {trig_src}", required=True)
 

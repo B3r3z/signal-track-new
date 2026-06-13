@@ -100,9 +100,10 @@ fsv:
   capture_time_s: 0.2
   ref_level_dbm: 0
 
-  # IFP = trigger od mocy IF. Jesli FSV nie lapie impulsu, na start mozna
-  # sprobowac IMM, zeby potwierdzic komunikacje i pobieranie IQ.
-  trigger_source: IFP
+  # IMM = natychmiastowa akwizycja. W tym tescie system zna target_time,
+  # wiec FSV zaczyna capture pre_capture_s przed impulsem TX.
+  # IFP mozna testowac pozniej, jesli chcesz triggerowac po mocy IF.
+  trigger_source: IMM
   trigger_level_dbm: -40
 
   timeout_ms: 20000

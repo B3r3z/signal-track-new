@@ -72,7 +72,7 @@ fsv:
   iq_sample_rate_sps: 1000000
   capture_time_s: 0.2
   ref_level_dbm: 0
-  trigger_source: IFP
+  trigger_source: IMM
   trigger_level_dbm: -40
   timeout_ms: 20000
   expected_pulse_s: 0.065536

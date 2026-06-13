@@ -53,6 +53,23 @@ Plik:
 config.system_fsv_phase_test.yaml
 ```
 
+Domyslnie FSV jest laczony przez surowy SCPI socket:
+
+```yaml
+fsv:
+  ip: 192.168.8.20
+  socket_port: 5025
+```
+
+Kod sklada z tego resource:
+
+```text
+TCPIP::192.168.8.20::5025::SOCKET
+```
+
+Dla takiego resource kod uzywa wlasnego klienta TCP i nie wymaga R&S VISA,
+`rsvisa` ani `RsInstrument`.
+
 Konfiguracja uzywa jednego TX:
 
 ```yaml
@@ -102,11 +119,13 @@ FSV uzywa tego czasu, zeby uzbroic akwizycje przed impulsem TX:
 
 ```yaml
 fsv:
+  trigger_source: IMM
   pre_capture_s: 0.15
 ```
 
 To jest wazne, bo bez tego FSV moglby zaczac akwizycje zbyt wczesnie albo zbyt
-pozno wzgledem zaplanowanego impulsu.
+pozno wzgledem zaplanowanego impulsu. `IMM` jest tu celowe: analizator nie czeka
+na trigger od mocy, tylko zbiera okno IQ w znanym czasie.
 
 ## Interpretacja
 
@@ -150,8 +169,9 @@ Jesli system czeka i nie startuje:
 Jesli FSV nie odsyla metryk:
 
 - sprawdz IP albo `resource` analizatora,
-- sprawdz `trigger_source` i `trigger_level_dbm`,
-- ustaw na poczatek `trigger_source: IMM`, jesli trigger IF power nie lapie,
+- ustaw `trigger_source: IMM` na start; `IFP` moze timeoutowac, jesli trigger
+  IF power nie lapie impulsu,
+- jesli koniecznie uzywasz `IFP`, sprawdz `trigger_level_dbm`,
 - sprawdz, czy `FSV3000Controller` loguje odebranie `TX_PULSE`.
 
 Jesli TX nie startuje przez PPS:
