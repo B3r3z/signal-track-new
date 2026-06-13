@@ -1,8 +1,16 @@
+from pathlib import Path
+
+
 class Parameters:
 
-    def __init__(self):
+    def __init__(self, config_path=None, role=None, node_id=None):
 
         self.test_mode = False
+        self.config_path = config_path
+        self.role = role
+        self.node_id = None if node_id is None else str(node_id)
+        self.raw_config = {}
+        self.node_config = {}
 
         # ============================================================
         # TRYB TX
@@ -17,15 +25,15 @@ class Parameters:
         # ============================================================
         # Dla 4 osobnych B210 to jest konieczne do sensownego fazowania.
         # Wszystkie TX muszą mieć wspólny/stabilny 10 MHz REF IN i PPS.
-        self.tx_use_external_clock = True
+        self.tx_use_external_clock = False
         self.tx_use_external_time_source = True
 
         # RX mogą zostać bez PPS, ale do precyzyjnych pomiarów lepiej też zsynchronizować.
         self.rx_use_external_clock = False
-        self.rx_use_external_time_source = False
+        self.rx_use_external_time_source = True
 
         # Stare flagi — zachowane dla kompatybilności
-        self.use_external_clock = True
+        self.use_external_clock = False
         self.use_external_time_source = True
 
         self.pps_timeout_sec = 2.5
@@ -38,6 +46,17 @@ class Parameters:
         self.mqtt_broker = "192.168.8.126"
         self.mqtt_port = 1883
         self.mqtt_keepalive = 60
+        self.mqtt_start_broker = True
+
+        # ============================================================
+        # TIMING PROB
+        # ============================================================
+
+        self.trial_lead_time_s = 1.5
+        self.trial_timeout_s = 4.0
+        self.trial_interval_s = 5.0
+        self.pre_trigger_s = 0.01
+        self.capture_time_s = 0.1
 
         # ============================================================
         # RF
@@ -62,6 +81,8 @@ class Parameters:
         # ============================================================
         # fi = nie licz faz z kąta, tylko użyj ręcznie podanej listy faz.
         self.beamforming_input_mode = "fi"
+        self.beamforming_mode = "optimize"
+        self.beamforming_target = "tc1"
 
         # Zostawione informacyjnie, ale w trybie "fi" nie jest używane do liczenia faz.
         self.tx_array_order = [3, 2, 1, 0]
@@ -155,6 +176,275 @@ class Parameters:
 
         self.results_dir = "results"
 
+        self.targets = {
+            "tc1": {
+                "rx_id": self.beamforming_target_rx_id,
+            }
+        }
+
+        self.calibration_enabled = True
+        self.calibration_continue_on_failure = False
+
+        self.fsv_enabled = False
+        self.fsv_capture_every_trial = True
+        self.fsv_required_for_beamforming = False
+
+        if config_path is not None:
+            self.apply_config(config_path, role=role, node_id=node_id)
+
+        self._validate_configuration()
+
+    def apply_config(self, config_path, role=None, node_id=None):
+        config_file = Path(config_path)
+
+        if not config_file.exists():
+            raise FileNotFoundError(f"Config file not found: {config_file}")
+
+        try:
+            import yaml
+        except ImportError as exc:
+            raise RuntimeError(
+                "PyYAML is required for --config. Install dependency: pyyaml"
+            ) from exc
+
+        with open(config_file, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+
+        self.raw_config = data
+        self.config_path = str(config_file)
+        self.role = role
+        self.node_id = None if node_id is None else str(node_id)
+
+        self._apply_runtime(data.get("runtime", {}), data)
+        self._apply_mqtt(data.get("mqtt", {}))
+        self._apply_timing(data.get("timing", {}))
+        self._apply_rf(data.get("rf", {}))
+        self._apply_nodes(data.get("nodes", {}))
+        self._apply_targets(data.get("targets", {}))
+        self._apply_beamforming(data.get("beamforming", {}))
+        self._apply_calibration(data.get("calibration", {}))
+        self._apply_fsv(data.get("fsv", {}))
+        self._select_node_config(role, node_id)
+
+    def _apply_runtime(self, cfg, root):
+        self.test_mode = bool(
+            cfg.get("test_mode", root.get("test_mode", self.test_mode))
+        )
+        self.results_dir = str(
+            cfg.get("results_dir", root.get("results_dir", self.results_dir))
+        )
+
+    def _apply_mqtt(self, cfg):
+        self.mqtt_broker = cfg.get("broker", self.mqtt_broker)
+        self.mqtt_port = int(cfg.get("port", self.mqtt_port))
+        self.mqtt_keepalive = int(cfg.get("keepalive", self.mqtt_keepalive))
+        self.mqtt_start_broker = bool(
+            cfg.get("start_broker", self.mqtt_start_broker)
+        )
+
+    def _apply_timing(self, cfg):
+        self.trial_lead_time_s = float(
+            cfg.get("trial_lead_time_s", self.trial_lead_time_s)
+        )
+        self.trial_timeout_s = float(
+            cfg.get("trial_timeout_s", self.trial_timeout_s)
+        )
+        self.trial_interval_s = float(
+            cfg.get("trial_interval_s", self.trial_interval_s)
+        )
+        self.pre_trigger_s = float(cfg.get("pre_trigger_s", self.pre_trigger_s))
+        self.capture_time_s = float(cfg.get("capture_time_s", self.capture_time_s))
+
+    def _apply_rf(self, cfg):
+        if "center_freq" in cfg:
+            self.center_freq = float(cfg["center_freq"])
+
+        if "tx_samp_rate" in cfg:
+            self.tx_samp_rate = float(cfg["tx_samp_rate"])
+
+        if "rx_samp_rate" in cfg:
+            self.rx_samp_rate = float(cfg["rx_samp_rate"])
+
+        if "tx_gain_db" in cfg:
+            self.tx_gain_db = float(cfg["tx_gain_db"])
+
+        if "rx_gain_db" in cfg:
+            self.rx_gain_db = float(cfg["rx_gain_db"])
+
+        if "iq_samples_per_packet" in cfg:
+            self.iq_samples_per_packet = int(cfg["iq_samples_per_packet"])
+
+        if "tx_signal_amplitude" in cfg:
+            self.tx_signal_amplitude = float(cfg["tx_signal_amplitude"])
+
+        if "tx_signal_frequency" in cfg:
+            self.tx_signal_frequency = float(cfg["tx_signal_frequency"])
+        else:
+            self.tx_signal_frequency = self.center_freq
+
+        if "tx_tone_offset_hz" in cfg:
+            self.tx_tone_offset_hz = float(cfg["tx_tone_offset_hz"])
+
+        if "tx_tone_offsets" in cfg:
+            self.tx_tone_offsets = {
+                int(tx_id): float(offset)
+                for tx_id, offset in cfg["tx_tone_offsets"].items()
+            }
+
+    def _apply_nodes(self, cfg):
+        tx_nodes = cfg.get("tx", {})
+        rx_nodes = cfg.get("rx", {})
+
+        if "tx" in cfg:
+            self.tx_usrp_serial_map = {
+                str(node_id): str(node_cfg.get("serial", ""))
+                for node_id, node_cfg in tx_nodes.items()
+            }
+            self.tx_count = len(self.tx_usrp_serial_map)
+
+        if "rx" in cfg:
+            self.rx_usrp_serial_map = {
+                str(node_id): str(node_cfg.get("serial", ""))
+                for node_id, node_cfg in rx_nodes.items()
+            }
+            self.rx_count = len(self.rx_usrp_serial_map)
+
+    def _apply_targets(self, cfg):
+        if cfg:
+            self.targets = {
+                str(name): {
+                    **value,
+                    "rx_id": str(value.get("rx_id")),
+                }
+                for name, value in cfg.items()
+            }
+
+            if self.beamforming_target in self.targets:
+                self.beamforming_target_rx_id = (
+                    self.targets[self.beamforming_target]["rx_id"]
+                )
+
+    def _apply_beamforming(self, cfg):
+        mode = cfg.get("mode")
+        if mode is not None:
+            self.beamforming_mode = str(mode)
+            self.beamforming_input_mode = str(mode)
+
+        self.beamforming_target = str(
+            cfg.get("target", self.beamforming_target)
+        )
+
+        if self.beamforming_target in self.targets:
+            self.beamforming_target_rx_id = (
+                self.targets[self.beamforming_target]["rx_id"]
+            )
+
+        if "tx_array_order" in cfg:
+            self.tx_array_order = [str(x) for x in cfg["tx_array_order"]]
+
+        if "tx_antenna_spacing_lambda" in cfg:
+            self.tx_antenna_spacing_lambda = float(
+                cfg["tx_antenna_spacing_lambda"]
+            )
+
+        if "scan_angles_deg" in cfg:
+            self.beam_angle_sweep_deg = [float(x) for x in cfg["scan_angles_deg"]]
+
+        if "repeats_per_angle" in cfg:
+            self.measurement_per_phase = int(cfg["repeats_per_angle"])
+
+        if "tx_signal_amplitude" in cfg:
+            self.tx_signal_amplitude = float(cfg["tx_signal_amplitude"])
+
+        if "phase_map_sweep_deg" in cfg:
+            self.phase_map_sweep_deg = cfg["phase_map_sweep_deg"]
+
+        if "amplitude_map_sweep" in cfg:
+            self.amplitude_map_sweep = cfg["amplitude_map_sweep"]
+
+    def _apply_calibration(self, cfg):
+        self.calibration_enabled = bool(
+            cfg.get("enabled", self.calibration_enabled)
+        )
+        self.calibration_continue_on_failure = bool(
+            cfg.get(
+                "continue_on_failure",
+                self.calibration_continue_on_failure,
+            )
+        )
+
+    def _apply_fsv(self, cfg):
+        self.fsv_enabled = bool(cfg.get("enabled", self.fsv_enabled))
+        self.fsv_capture_every_trial = bool(
+            cfg.get("capture_every_trial", self.fsv_capture_every_trial)
+        )
+        self.fsv_required_for_beamforming = bool(
+            cfg.get(
+                "required_for_beamforming",
+                self.fsv_required_for_beamforming,
+            )
+        )
+
+        for key, value in cfg.items():
+            setattr(self, f"fsv_{key}", value)
+
+    def _select_node_config(self, role, node_id):
+        if role not in ("tx", "rx"):
+            return
+
+        node_id = str(node_id)
+        nodes = self.raw_config.get("nodes", {}).get(role, {})
+
+        if node_id not in nodes:
+            raise ValueError(
+                f"Missing config section for {role} node id={node_id}"
+            )
+
+        self.node_config = nodes[node_id] or {}
+
+        if role == "tx":
+            self.tx_use_external_clock = bool(
+                self.node_config.get(
+                    "external_clock",
+                    self.tx_use_external_clock,
+                )
+            )
+            self.tx_use_external_time_source = bool(
+                self.node_config.get(
+                    "external_time_source",
+                    self.tx_use_external_time_source,
+                )
+            )
+
+        if role == "rx":
+            self.rx_use_external_clock = bool(
+                self.node_config.get(
+                    "external_clock",
+                    self.rx_use_external_clock,
+                )
+            )
+            self.rx_use_external_time_source = bool(
+                self.node_config.get(
+                    "external_time_source",
+                    self.rx_use_external_time_source,
+                )
+            )
+
+    def get_target_rx_id(self, target=None):
+        target = str(target or self.beamforming_target)
+
+        if target not in self.targets:
+            raise ValueError(f"Unknown beamforming target: {target}")
+
+        return str(self.targets[target]["rx_id"])
+
+    def get_expected_node_ids(self, role):
+        if role == "tx":
+            return self.get_tx_ids()
+        if role == "rx":
+            return self.get_rx_ids()
+        raise ValueError(f"Unknown role: {role}")
+
     def get_rx_ids(self):
         return list(self.rx_usrp_serial_map.keys())
 
@@ -166,3 +456,56 @@ class Parameters:
 
     def get_tx_serial(self, tx_id):
         return self.tx_usrp_serial_map[str(tx_id)]
+
+    def _validate_configuration(self):
+        if self.trial_lead_time_s <= 0:
+            raise ValueError("trial_lead_time_s must be > 0")
+
+        if self.trial_interval_s <= 0:
+            raise ValueError("trial_interval_s must be > 0")
+
+        if self.capture_time_s <= 0:
+            raise ValueError("capture_time_s must be > 0")
+
+        if self.measurement_per_phase <= 0:
+            raise ValueError("measurement_per_phase must be > 0")
+
+        tx_ids = {str(tx_id) for tx_id in self.get_tx_ids()}
+        rx_ids = {str(rx_id) for rx_id in self.get_rx_ids()}
+
+        if not tx_ids:
+            raise ValueError("At least one TX node must be configured")
+
+        fsv_metric_mode = bool(
+            self.fsv_enabled and self.fsv_required_for_beamforming
+        )
+
+        if not rx_ids and not fsv_metric_mode:
+            raise ValueError("At least one RX node must be configured")
+
+        target_rx_id = str(self.beamforming_target_rx_id)
+        if rx_ids and target_rx_id not in rx_ids:
+            raise ValueError(
+                f"Beamforming target RX id={target_rx_id} is not configured"
+            )
+
+        tx_array_order = [str(tx_id) for tx_id in self.tx_array_order]
+        if set(tx_array_order) != tx_ids:
+            raise ValueError(
+                "tx_array_order must contain each configured TX id exactly once"
+            )
+
+        if str(self.beamforming_input_mode).lower() in ("fi", "manual_sweep"):
+            for idx, phase_map in enumerate(self.phase_map_sweep_deg):
+                phase_ids = {str(tx_id) for tx_id in phase_map.keys()}
+                if phase_ids != tx_ids:
+                    raise ValueError(
+                        f"phase_map_sweep_deg[{idx}] must define every configured TX id"
+                    )
+
+            for idx, amplitude_map in enumerate(self.amplitude_map_sweep):
+                amplitude_ids = {str(tx_id) for tx_id in amplitude_map.keys()}
+                if amplitude_ids != tx_ids:
+                    raise ValueError(
+                        f"amplitude_map_sweep[{idx}] must define every configured TX id"
+                    )

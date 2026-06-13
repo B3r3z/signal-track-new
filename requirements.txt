@@ -1,3 +1,6 @@
 paho-mqtt
 numpy
 loguru
+PyYAML
+pytest
+RsInstrument

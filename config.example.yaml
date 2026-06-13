@@ -1,0 +1,87 @@
+runtime:
+  test_mode: false
+  results_dir: results
+
+mqtt:
+  broker: 192.168.8.126
+  port: 1883
+  keepalive: 60
+  start_broker: true
+
+timing:
+  trial_lead_time_s: 1.5
+  trial_timeout_s: 4.0
+  trial_interval_s: 5.0
+  pre_trigger_s: 0.01
+  capture_time_s: 0.1
+
+rf:
+  center_freq: 868000000
+  tx_samp_rate: 500000
+  rx_samp_rate: 500000
+  tx_gain_db: 40
+  rx_gain_db: 30
+  iq_samples_per_packet: 32768
+  tx_signal_amplitude: 0.7
+  tx_tone_offset_hz: 0
+  tx_tone_offsets:
+    "0": 0
+    "1": 0
+    "2": 0
+    "3": 0
+
+nodes:
+  tx:
+    "0":
+      serial: "3273ABF"
+      external_clock: false
+      external_time_source: true
+    "1":
+      serial: "3273ACB"
+      external_clock: false
+      external_time_source: true
+    "2":
+      serial: "3273A15"
+      external_clock: false
+      external_time_source: true
+    "3":
+      serial: "3273ADC"
+      external_clock: false
+      external_time_source: true
+
+  rx:
+    "0":
+      serial: "3273AF9"
+      external_clock: false
+      external_time_source: true
+    "1":
+      serial: "3273AC0"
+      external_clock: false
+      external_time_source: true
+    "2":
+      serial: "3273B03"
+      external_clock: false
+      external_time_source: true
+
+targets:
+  tc1:
+    rx_id: "1"
+
+beamforming:
+  mode: optimize
+  target: tc1
+  geometry: linear
+  tx_array_order: ["0", "1", "2", "3"]
+  tx_antenna_spacing_lambda: 0.5
+  scan_angles_deg: [-60, -45, -30, -15, 0, 15, 30, 45, 60]
+  repeats_per_angle: 3
+  tx_signal_amplitude: 0.7
+
+calibration:
+  enabled: true
+  continue_on_failure: false
+
+fsv:
+  enabled: true
+  capture_every_trial: true
+  required_for_beamforming: false

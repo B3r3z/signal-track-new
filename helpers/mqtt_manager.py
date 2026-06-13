@@ -9,7 +9,12 @@ class MqttManager:
         self.port = port
         self.keepalive = keepalive
 
-        self.client = mqtt.Client()
+        try:
+            self.client = mqtt.Client(
+                callback_api_version=mqtt.CallbackAPIVersion.VERSION2
+            )
+        except AttributeError:
+            self.client = mqtt.Client()
         self._message_handler = None
         self._connect_handler = None
 
@@ -41,10 +46,10 @@ class MqttManager:
             make_message(src, node_id, cmd, payload or {}),
         )
 
-    def _on_connect(self, client, userdata, flags, rc):
+    def _on_connect(self, client, userdata, flags, reason_code, properties=None):
         self.subscribe_bus()
         if self._connect_handler is not None:
-            self._connect_handler(rc)
+            self._connect_handler(int(reason_code))
 
     def _on_message(self, client, userdata, msg):
         if self._message_handler is None:

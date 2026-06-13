@@ -13,8 +13,8 @@ class SystemLogic:
         self.beamforming.on_rx_iq(rx_id, samples)
         return self.beamforming.compute_tx_command()
 
-    def handle_rx_metric(self, rx_id, metric):
-        self.beamforming.on_rx_metric(rx_id, metric)
+    def handle_rx_metric(self, rx_id, metric, *, linear=False):
+        self.beamforming.on_rx_metric(rx_id, metric, linear=linear)
         return self.beamforming.compute_tx_command()
 
 
