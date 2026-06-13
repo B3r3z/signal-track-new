@@ -46,6 +46,7 @@ class Parameters:
         self.mqtt_broker = "192.168.8.126"
         self.mqtt_port = 1883
         self.mqtt_keepalive = 60
+        self.mqtt_start_broker = True
 
         # ============================================================
         # TIMING PROB
@@ -237,6 +238,9 @@ class Parameters:
         self.mqtt_broker = cfg.get("broker", self.mqtt_broker)
         self.mqtt_port = int(cfg.get("port", self.mqtt_port))
         self.mqtt_keepalive = int(cfg.get("keepalive", self.mqtt_keepalive))
+        self.mqtt_start_broker = bool(
+            cfg.get("start_broker", self.mqtt_start_broker)
+        )
 
     def _apply_timing(self, cfg):
         self.trial_lead_time_s = float(

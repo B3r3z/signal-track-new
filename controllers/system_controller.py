@@ -2,6 +2,8 @@ import csv
 import json
 import math
 import os
+import socket
+import subprocess
 import time
 
 import numpy as np
@@ -496,8 +498,115 @@ class SystemController(Controller):
         with open(self.trial_csv, "a", newline="", encoding="utf-8") as f:
             csv.writer(f).writerow(row)
 
+    def _mqtt_port_is_open(self):
+        try:
+            with socket.create_connection(
+                (self.parameters.mqtt_broker, int(self.parameters.mqtt_port)),
+                timeout=0.5,
+            ):
+                return True
+        except OSError:
+            return False
+
+    def _local_broker_hosts(self):
+        hosts = {"localhost", "127.0.0.1", "::1"}
+
+        try:
+            hosts.add(socket.gethostname())
+            hosts.add(socket.getfqdn())
+        except OSError:
+            pass
+
+        try:
+            for info in socket.getaddrinfo(socket.gethostname(), None):
+                hosts.add(info[4][0])
+        except OSError:
+            pass
+
+        try:
+            result = subprocess.run(
+                ["hostname", "-I"],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=1.0,
+            )
+            if result.returncode == 0:
+                hosts.update(result.stdout.split())
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            pass
+
+        return {str(host).strip().lower() for host in hosts if str(host).strip()}
+
+    def _broker_is_local(self):
+        broker = str(self.parameters.mqtt_broker).strip().lower()
+        if broker in self._local_broker_hosts():
+            return True
+
+        try:
+            addresses = {
+                info[4][0].lower()
+                for info in socket.getaddrinfo(broker, None)
+            }
+        except OSError:
+            return False
+
+        return bool(addresses & self._local_broker_hosts())
+
+    def _start_local_mqtt_broker(self):
+        if not self.parameters.mqtt_start_broker:
+            return
+
+        if self._mqtt_port_is_open():
+            self.log.info("MQTT broker already running")
+            return
+
+        if not self._broker_is_local():
+            self.log.info(
+                f"MQTT broker {self.parameters.mqtt_broker}:"
+                f"{self.parameters.mqtt_port} is not local, skipping service start"
+            )
+            return
+
+        commands = []
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
+            commands.append(["systemctl", "start", "mosquitto"])
+        else:
+            commands.append(["sudo", "-n", "systemctl", "start", "mosquitto"])
+
+        for command in commands:
+            try:
+                result = subprocess.run(
+                    command,
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=10.0,
+                )
+            except FileNotFoundError:
+                continue
+            except subprocess.TimeoutExpired:
+                self.log.warning("Starting MQTT broker timed out")
+                return
+
+            if result.returncode == 0:
+                time.sleep(0.5)
+                if self._mqtt_port_is_open():
+                    self.log.info("MQTT broker started")
+                    return
+
+            stderr = (result.stderr or "").strip()
+            if stderr:
+                self.log.warning(f"MQTT broker start failed: {stderr}")
+
+        self.log.warning(
+            "MQTT broker is not running; start it manually with: "
+            "sudo systemctl start mosquitto"
+        )
+
     def run(self):
         self.log.info("SystemController running - waiting for components")
+        self._start_local_mqtt_broker()
         self.connect_bus()
 
         while True:

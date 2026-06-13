@@ -19,6 +19,7 @@ def test_config_loading_and_tx_node_selection(tmp_path):
           broker: localhost
           port: 1884
           keepalive: 30
+          start_broker: false
 
         timing:
           trial_lead_time_s: 2.0
@@ -77,6 +78,7 @@ def test_config_loading_and_tx_node_selection(tmp_path):
     assert params.mqtt_broker == "localhost"
     assert params.mqtt_port == 1884
     assert params.mqtt_keepalive == 30
+    assert params.mqtt_start_broker is False
     assert params.trial_lead_time_s == 2.0
     assert params.trial_timeout_s == 5.0
     assert params.trial_interval_s == 6.0
