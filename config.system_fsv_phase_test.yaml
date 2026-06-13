@@ -63,8 +63,11 @@ fsv:
   required_for_beamforming: true
   capture_every_trial: true
   ip: 192.168.8.20
+  socket_port: 5025
   # Alternatywnie podaj pelny resource:
-  # resource: "TCPIP::192.168.8.200::hislip0"
+  # resource: "TCPIP::192.168.8.20::5025::SOCKET"
+  # HiSLIP wymaga backendu VISA, np. R&S VISA:
+  # resource: "TCPIP::192.168.8.20::hislip0"
   center_freq_hz: 868000000
   iq_sample_rate_sps: 1000000
   capture_time_s: 0.2

@@ -86,8 +86,13 @@ fsv:
   required_for_beamforming: true
   capture_every_trial: true
 
-  # Podmien na IP analizatora. Alternatywnie uzyj pelnego resource ponizej.
+  # Podmien na IP analizatora. Domyslnie kod uzywa SCPI socket na porcie 5025,
+  # czyli nie wymaga instalacji R&S VISA/rsvisa.
   ip: 192.168.8.200
+  socket_port: 5025
+  # resource: "TCPIP::192.168.8.200::5025::SOCKET"
+  #
+  # HiSLIP tez jest mozliwy, ale wymaga backendu VISA:
   # resource: "TCPIP::192.168.8.200::hislip0"
 
   center_freq_hz: 868000000

@@ -41,7 +41,8 @@ class FSV3000IqClient:
             if "::" in ip_or_resource:
                 self.resource = ip_or_resource
             else:
-                self.resource = f"TCPIP::{ip_or_resource}::hislip0"
+                socket_port = int(getattr(parameters, "fsv_socket_port", 5025))
+                self.resource = f"TCPIP::{ip_or_resource}::{socket_port}::SOCKET"
 
         self.center_freq_hz = float(
             getattr(parameters, "fsv_center_freq_hz", getattr(parameters, "tx_signal_frequency", 868e6))
