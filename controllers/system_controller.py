@@ -36,6 +36,10 @@ class SystemController(Controller):
 
         self.tx_ids = {str(x) for x in self.parameters.get_tx_ids()}
         self.rx_ids = {str(x) for x in self.parameters.get_rx_ids()}
+        self.fsv_metric_mode = bool(
+            self.parameters.fsv_enabled
+            and self.parameters.fsv_required_for_beamforming
+        )
 
         self.start_sent = False
         self._last_ready_state = None
@@ -252,6 +256,8 @@ class SystemController(Controller):
             return
 
         self.active_trial["fsv_metrics"][str(fsv_id)] = payload
+        self.log.info(f"[TRIAL {trial_id}] FSV{fsv_id} metric received")
+        self._maybe_finish_trial()
 
     def _trial_id_from_target_time(self, target_time):
         if self.active_trial is None:
@@ -266,22 +272,25 @@ class SystemController(Controller):
         return None
 
     def _check_and_start(self):
-        current_state = (len(self.tx_ready), len(self.rx_ready))
+        current_state = (len(self.tx_ready), len(self.rx_ready), len(self.fsv_ready))
 
         if current_state != self._last_ready_state:
             self.log.info(
                 f"READY CHECK: TX {len(self.tx_ready)}/{len(self.tx_ids)}, "
-                f"RX {len(self.rx_ready)}/{len(self.rx_ids)}"
+                f"RX {len(self.rx_ready)}/{len(self.rx_ids)}, "
+                f"FSV {len(self.fsv_ready)}/{'1' if self.fsv_metric_mode else '0'}"
             )
             self._last_ready_state = current_state
 
         if self.start_sent:
             return
 
-        if self.tx_ready == self.tx_ids and self.rx_ready == self.rx_ids:
+        fsv_ready = (not self.fsv_metric_mode) or bool(self.fsv_ready)
+
+        if self.tx_ready == self.tx_ids and self.rx_ready == self.rx_ids and fsv_ready:
             self.state = ExperimentState.SYNCING_CLOCKS
             self.sync_epoch_pc = math.ceil(time.time())
-            self.log.info("All required TX/RX ready, sending SYNC_CLOCKS")
+            self.log.info("All required components ready, sending SYNC_CLOCKS")
             self.send_message(
                 Command.SYNC_CLOCKS,
                 {"time_at_next_pps": 0.0},
@@ -323,12 +332,17 @@ class SystemController(Controller):
         self.trial_id += 1
         target_time = self._next_target_time()
         target = str(self.parameters.beamforming_target)
+        target_rx_id = (
+            self.parameters.get_target_rx_id(target)
+            if self.rx_ids
+            else ""
+        )
 
         self.active_trial = {
             "trial_id": self.trial_id,
             "target_time": target_time,
             "target": target,
-            "target_rx_id": self.parameters.get_target_rx_id(target),
+            "target_rx_id": target_rx_id,
             "tx_command": tx_command,
             "rx_metrics": {},
             "tx_statuses": {},
@@ -351,12 +365,14 @@ class SystemController(Controller):
             "pre_trigger_s": float(self.parameters.pre_trigger_s),
             "capture_time_s": float(self.parameters.capture_time_s),
         }
-        self.send_message(Command.RX_CAPTURE, capture_payload)
+        if self.rx_ids:
+            self.send_message(Command.RX_CAPTURE, capture_payload)
 
         tx_payload = {
             "trial_id": self.trial_id,
             "target": target,
             "target_time": target_time,
+            "target_pc_unix": self.start_time_stamp + target_time,
             "beam_angle_deg": tx_command.get("beam_angle_deg"),
             "phase_map": tx_command.get("phase_map", {}),
             "amplitude_map": tx_command.get("amplitude_map", {}),
@@ -371,8 +387,12 @@ class SystemController(Controller):
 
         got_all_rx = set(self.active_trial["rx_metrics"].keys()) >= self.rx_ids
         got_all_tx = set(self.active_trial["tx_statuses"].keys()) >= self.tx_ids
+        got_required_fsv = (
+            not self.fsv_metric_mode
+            or bool(self.active_trial["fsv_metrics"])
+        )
 
-        if got_all_rx and got_all_tx:
+        if got_all_rx and got_all_tx and got_required_fsv:
             self._finish_trial()
 
     def _check_trial_timeout(self):
@@ -391,10 +411,14 @@ class SystemController(Controller):
 
         missing_rx = sorted(self.rx_ids - set(self.active_trial["rx_metrics"].keys()))
         missing_tx = sorted(self.tx_ids - set(self.active_trial["tx_statuses"].keys()))
+        missing_fsv = []
+        if self.fsv_metric_mode and not self.active_trial["fsv_metrics"]:
+            missing_fsv = ["fsv"]
 
         self.active_trial["status"] = "FAILED"
         self.active_trial["failure_reason"] = (
-            f"timeout missing_rx={missing_rx} missing_tx={missing_tx}"
+            f"timeout missing_rx={missing_rx} "
+            f"missing_tx={missing_tx} missing_fsv={missing_fsv}"
         )
         self.log.warning(
             f"[TRIAL {self.active_trial['trial_id']}] timeout | "
@@ -418,6 +442,10 @@ class SystemController(Controller):
         any_failed_rx = any(
             not bool(metric.get("capture_ok", True))
             for metric in trial["rx_metrics"].values()
+        )
+        any_failed_fsv = any(
+            not bool(metric.get("analyzer_ok", True))
+            for metric in trial["fsv_metrics"].values()
         )
 
         if any_late:
@@ -443,6 +471,19 @@ class SystemController(Controller):
             trial["failure_reason"] = str(failure_reason)
             update_beamforming = False
 
+        if self.fsv_metric_mode and any_failed_fsv:
+            trial["status"] = "FAILED"
+            failure_reason = next(
+                (
+                    metric.get("analyzer_error")
+                    for metric in trial["fsv_metrics"].values()
+                    if not bool(metric.get("analyzer_ok", True))
+                ),
+                "FSV capture failed",
+            )
+            trial["failure_reason"] = str(failure_reason)
+            update_beamforming = False
+
         if trial["status"] == "RUNNING":
             trial["status"] = "OK"
 
@@ -451,20 +492,26 @@ class SystemController(Controller):
 
         target_rx_id = str(trial["target_rx_id"])
 
-        if target_rx_id not in trial["rx_metrics"]:
+        if self.fsv_metric_mode:
+            metric_linear = self._fsv_metric_linear(trial)
+            if metric_linear is None:
+                update_beamforming = False
+                if not trial["failure_reason"]:
+                    trial["failure_reason"] = "missing FSV metric"
+        elif target_rx_id not in trial["rx_metrics"]:
             update_beamforming = False
             if not trial["failure_reason"]:
                 trial["failure_reason"] = f"missing target RX metric: {target_rx_id}"
+            metric_linear = None
+        else:
+            metric_linear = float(trial["rx_metrics"][target_rx_id]["power_linear"])
 
         next_tx_command = None
 
         if update_beamforming and trial["tx_command"].get("mode") != "calibration":
-            power_linear = float(
-                trial["rx_metrics"][target_rx_id]["power_linear"]
-            )
             next_tx_command = self.logic.handle_rx_metric(
-                target_rx_id,
-                power_linear,
+                target_rx_id or "fsv",
+                metric_linear,
                 linear=True,
             )
 
@@ -474,6 +521,29 @@ class SystemController(Controller):
         self._append_trial_row(trial, updated_beamforming=bool(update_beamforming))
         self.active_trial = None
         self.state = ExperimentState.READY_TO_MEASURE
+
+    def _fsv_metric_linear(self, trial):
+        if not trial["fsv_metrics"]:
+            return None
+
+        metric = next(iter(trial["fsv_metrics"].values()))
+
+        if "signal_power_linear" in metric:
+            return float(metric["signal_power_linear"])
+
+        if "signal_power_db" in metric:
+            return 10.0 ** (float(metric["signal_power_db"]) / 10.0)
+
+        tx_metrics = metric.get("tx", {}) or {}
+        measured_tx_id = str(getattr(self.parameters, "fsv_measured_tx_id", "0"))
+        measured_tx = tx_metrics.get(measured_tx_id)
+        if measured_tx is None and tx_metrics:
+            measured_tx = next(iter(tx_metrics.values()))
+
+        if measured_tx and "phasor_abs" in measured_tx:
+            return float(measured_tx["phasor_abs"]) ** 2
+
+        return None
 
     def _append_trial_row(self, trial, updated_beamforming):
         tx_command = trial["tx_command"]

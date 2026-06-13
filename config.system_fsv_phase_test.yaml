@@ -1,0 +1,79 @@
+runtime:
+  test_mode: false
+  results_dir: results
+
+mqtt:
+  broker: 192.168.8.143
+  port: 1883
+  keepalive: 60
+  start_broker: false
+
+timing:
+  trial_lead_time_s: 1.5
+  trial_timeout_s: 4.0
+  trial_interval_s: 3.0
+  pre_trigger_s: 0.01
+  capture_time_s: 0.1
+
+rf:
+  center_freq: 868000000
+  tx_samp_rate: 500000
+  tx_gain_db: 20
+  iq_samples_per_packet: 32768
+  tx_signal_amplitude: 0.5
+  tx_tone_offset_hz: 10000
+  tx_tone_offsets:
+    "0": 10000
+
+nodes:
+  tx:
+    "0":
+      serial: "3273ABF"
+      external_clock: false
+      external_time_source: true
+  rx: {}
+
+targets:
+  tc1:
+    rx_id: ""
+
+beamforming:
+  mode: manual_sweep
+  target: tc1
+  tx_array_order: ["0"]
+  repeats_per_angle: 1
+  tx_signal_amplitude: 0.5
+  phase_map_sweep_deg:
+    - {"0": 0}
+    - {"0": 90}
+    - {"0": 180}
+    - {"0": 270}
+  amplitude_map_sweep:
+    - {"0": 0.5}
+    - {"0": 0.5}
+    - {"0": 0.5}
+    - {"0": 0.5}
+
+calibration:
+  enabled: false
+  continue_on_failure: false
+
+fsv:
+  enabled: true
+  required_for_beamforming: true
+  capture_every_trial: true
+  ip: TCPIP::192.168.8.20::hislip0
+  # Alternatywnie podaj pelny resource:
+  # resource: "TCPIP::192.168.8.200::hislip0"
+  center_freq_hz: 868000000
+  iq_sample_rate_sps: 1000000
+  capture_time_s: 0.2
+  ref_level_dbm: 0
+  trigger_source: IFP
+  trigger_level_dbm: -40
+  timeout_ms: 20000
+  expected_pulse_s: 0.065536
+  pre_capture_s: 0.15
+  measured_tx_id: "0"
+  min_signal_power_db: -80
+  min_phasor_abs: 0.00001

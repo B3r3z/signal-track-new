@@ -295,14 +295,14 @@ class Parameters:
         tx_nodes = cfg.get("tx", {})
         rx_nodes = cfg.get("rx", {})
 
-        if tx_nodes:
+        if "tx" in cfg:
             self.tx_usrp_serial_map = {
                 str(node_id): str(node_cfg.get("serial", ""))
                 for node_id, node_cfg in tx_nodes.items()
             }
             self.tx_count = len(self.tx_usrp_serial_map)
 
-        if rx_nodes:
+        if "rx" in cfg:
             self.rx_usrp_serial_map = {
                 str(node_id): str(node_cfg.get("serial", ""))
                 for node_id, node_cfg in rx_nodes.items()
@@ -476,11 +476,15 @@ class Parameters:
         if not tx_ids:
             raise ValueError("At least one TX node must be configured")
 
-        if not rx_ids:
+        fsv_metric_mode = bool(
+            self.fsv_enabled and self.fsv_required_for_beamforming
+        )
+
+        if not rx_ids and not fsv_metric_mode:
             raise ValueError("At least one RX node must be configured")
 
         target_rx_id = str(self.beamforming_target_rx_id)
-        if target_rx_id not in rx_ids:
+        if rx_ids and target_rx_id not in rx_ids:
             raise ValueError(
                 f"Beamforming target RX id={target_rx_id} is not configured"
             )

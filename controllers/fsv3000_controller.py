@@ -345,6 +345,7 @@ class FSV3000Controller(Controller):
             self.capture_queue.put({
                 "trial_id": payload.get("trial_id"),
                 "target_time": float(target_time),
+                "target_pc_unix": payload.get("target_pc_unix"),
                 "beam_angle_deg": payload.get("beam_angle_deg", ""),
                 "phase_cmd_deg": dict(self.last_phase_cmd_deg),
             })
@@ -508,6 +509,7 @@ class FSV3000Controller(Controller):
         self.send_message(Command.READY, {"resource": self.analyzer.resource})
 
         while not self.stop_event.is_set():
+            self.process_pending_messages()
             time.sleep(0.2)
 
     def stop(self):

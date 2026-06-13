@@ -120,3 +120,116 @@ def test_system_trial_flow_groups_results_by_trial_id(tmp_path):
     assert rx_metrics["0"]["power_linear"] == 2.0
     assert tx_statuses["0"]["samples_sent"] == 10
 
+
+def test_system_trial_flow_can_use_fsv_metric_without_rx(tmp_path):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        textwrap.dedent(
+            f"""
+            runtime:
+              test_mode: true
+              results_dir: "{tmp_path.as_posix()}/results"
+
+            mqtt:
+              broker: localhost
+
+            timing:
+              trial_lead_time_s: 0.1
+              trial_timeout_s: 0.1
+              trial_interval_s: 1.0
+              pre_trigger_s: 0.01
+              capture_time_s: 0.02
+
+            nodes:
+              tx:
+                "0":
+                  serial: "TX000"
+                  external_clock: false
+                  external_time_source: false
+              rx: {{}}
+
+            targets:
+              tc1:
+                rx_id: ""
+
+            beamforming:
+              mode: manual_sweep
+              target: tc1
+              tx_array_order: ["0"]
+              repeats_per_angle: 1
+              phase_map_sweep_deg:
+                - {{"0": 0}}
+                - {{"0": 90}}
+              amplitude_map_sweep:
+                - {{"0": 0.7}}
+                - {{"0": 0.7}}
+
+            calibration:
+              enabled: false
+
+            fsv:
+              enabled: true
+              required_for_beamforming: true
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    controller = SystemController(config_path=config_path)
+    sent = []
+    controller.send_message = lambda cmd, payload=None: sent.append((cmd, payload or {}))
+
+    controller.start_sent = True
+    controller.start_time_stamp = time.time()
+    controller._start_next_trial()
+
+    assert sent[0][0] == Command.TX_PULSE
+    assert "target_pc_unix" in sent[0][1]
+
+    controller.on_message({
+        "src": "tx",
+        "id": "0",
+        "cmd": Command.TX_DONE.value,
+        "payload": {
+            "trial_id": 1,
+            "target_time": sent[0][1]["target_time"],
+            "samples_requested": 10,
+            "samples_sent": 10,
+            "late": False,
+        },
+    })
+
+    assert controller.active_trial is not None
+
+    controller.on_message({
+        "src": "fsv",
+        "id": "0",
+        "cmd": Command.FSV_PHASE_METRIC.value,
+        "payload": {
+            "trial_id": 1,
+            "target_time": sent[0][1]["target_time"],
+            "analyzer_ok": True,
+            "signal_power_db": -10.0,
+            "tx": {
+                "0": {
+                    "phase_cmd_deg": 0.0,
+                    "phase_raw_deg": 12.0,
+                    "phasor_abs": 0.3,
+                }
+            },
+        },
+    })
+
+    assert controller.active_trial is None
+
+    with open(controller.trial_csv, newline="", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+
+    assert len(rows) == 1
+    assert rows[0]["status"] == "OK"
+    assert rows[0]["target_rx_id"] == ""
+    assert rows[0]["rx_metrics"] == "{}"
+    assert rows[0]["updated_beamforming"] == "True"
+
+    fsv_metrics = json.loads(rows[0]["fsv_metrics"])
+    assert fsv_metrics["0"]["signal_power_db"] == -10.0
