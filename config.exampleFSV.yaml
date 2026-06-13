@@ -1,8 +1,18 @@
+# Przykladowy config do testu systemowego z jednym TX i analizatorem FSV3000.
+# Uruchamiane procesy:
+#   python3 main.py system --config config.exampleFSV.yaml
+#   python3 main.py tx 0 --config config.exampleFSV.yaml
+#   python3 main.py fsv 0 --config config.exampleFSV.yaml
+#
+# W tym scenariuszu nie uruchamiamy RX. FSV dziala jako zrodlo metryki systemu.
+
 runtime:
   test_mode: false
   results_dir: results
 
 mqtt:
+  # Adres komputera, na ktorym dziala Mosquitto.
+  # Dla labpc zwykle: 192.168.8.143
   broker: 192.168.8.143
   port: 1883
   keepalive: 60
@@ -21,6 +31,8 @@ rf:
   tx_gain_db: 20
   iq_samples_per_packet: 32768
   tx_signal_amplitude: 0.5
+
+  # Offset tonu pomaga FSV stabilniej wyznaczac faze z IQ.
   tx_tone_offset_hz: 10000
   tx_tone_offsets:
     "0": 10000
@@ -28,26 +40,35 @@ rf:
 nodes:
   tx:
     "0":
+      # Podmien na serial aktualnie podpietego USRP.
       serial: "3273ABF"
       external_clock: false
+
+      # true wymaga PPS. Do szybkiego testu bez PPS mozna dac false.
       external_time_source: false
+
+  # W tescie FSV-only nie uruchamiamy RX.
   rx: {}
 
 targets:
+  # Pusty rx_id jest celowy: metryka pochodzi z FSV, nie z RX.
   tc1:
     rx_id: ""
 
 beamforming:
+  # Reczny sweep faz dla TX0. System bedzie wysylal normalne TX_PULSE.
   mode: manual_sweep
   target: tc1
   tx_array_order: ["0"]
   repeats_per_angle: 1
   tx_signal_amplitude: 0.5
+
   phase_map_sweep_deg:
     - {"0": 0}
     - {"0": 90}
     - {"0": 180}
     - {"0": 270}
+
   amplitude_map_sweep:
     - {"0": 0.5}
     - {"0": 0.5}
@@ -60,20 +81,29 @@ calibration:
 
 fsv:
   enabled: true
+
+  # To wlacza tryb: FSV jest wymagana metryka i system nie czeka na RX.
   required_for_beamforming: true
   capture_every_trial: true
-  ip: 192.168.8.20
-  # Alternatywnie podaj pelny resource:
+
+  # Podmien na IP analizatora. Alternatywnie uzyj pelnego resource ponizej.
+  ip: 192.168.8.200
   # resource: "TCPIP::192.168.8.200::hislip0"
+
   center_freq_hz: 868000000
   iq_sample_rate_sps: 1000000
   capture_time_s: 0.2
   ref_level_dbm: 0
+
+  # IFP = trigger od mocy IF. Jesli FSV nie lapie impulsu, na start mozna
+  # sprobowac IMM, zeby potwierdzic komunikacje i pobieranie IQ.
   trigger_source: IFP
   trigger_level_dbm: -40
+
   timeout_ms: 20000
   expected_pulse_s: 0.065536
   pre_capture_s: 0.15
+
   measured_tx_id: "0"
   min_signal_power_db: -80
   min_phasor_abs: 0.00001

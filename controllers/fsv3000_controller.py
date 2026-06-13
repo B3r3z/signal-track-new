@@ -37,8 +37,11 @@ class FSV3000IqClient:
         self.parameters = parameters
         self.resource = getattr(parameters, "fsv_resource", None)
         if not self.resource:
-            ip = getattr(parameters, "fsv_ip", "192.168.0.10")
-            self.resource = f"TCPIP::{ip}::hislip0"
+            ip_or_resource = str(getattr(parameters, "fsv_ip", "192.168.0.10"))
+            if "::" in ip_or_resource:
+                self.resource = ip_or_resource
+            else:
+                self.resource = f"TCPIP::{ip_or_resource}::hislip0"
 
         self.center_freq_hz = float(
             getattr(parameters, "fsv_center_freq_hz", getattr(parameters, "tx_signal_frequency", 868e6))
@@ -56,7 +59,13 @@ class FSV3000IqClient:
         if self.test_mode:
             return
 
-        from RsInstrument import RsInstrument
+        try:
+            from RsInstrument import RsInstrument
+        except ImportError as exc:
+            raise RuntimeError(
+                "Missing dependency RsInstrument. Install it with: "
+                "python3 -m pip install RsInstrument"
+            ) from exc
 
         if self.resource.upper().endswith("::SOCKET"):
             self.inst = RsInstrument(self.resource, True, False, "SelectVisa='socket'")
